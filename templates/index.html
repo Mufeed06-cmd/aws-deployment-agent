@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AWS Deployment Agent</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .container {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      max-width: 600px;
+      width: 100%;
+      padding: 32px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #94a3b8;
+      font-size: 0.95rem;
+      margin-bottom: 24px;
+    }
+
+    .action-row {
+      margin-bottom: 24px;
+    }
+
+    button {
+      background-color: #2563eb;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 12px 24px;
+      cursor: pointer;
+      transition: background-color 0.2s, opacity 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button:hover:not(:disabled) {
+      background-color: #1d4ed8;
+    }
+
+    button:disabled {
+      background-color: #475569;
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+
+    .status-panel {
+      background: #090d16;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 16px;
+      min-height: 160px;
+    }
+
+    .status-header {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #1e293b;
+      padding-bottom: 8px;
+    }
+
+    .log-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.92rem;
+    }
+
+    .log-item {
+      line-height: 1.4;
+      animation: fadeIn 0.3s ease-in-out;
+      word-break: break-all;
+    }
+
+    .log-item a {
+      color: #38bdf8;
+      text-decoration: underline;
+      font-weight: 600;
+    }
+
+    .log-item a:hover {
+      color: #7dd3fc;
+    }
+
+    .empty-state {
+      color: #475569;
+      font-style: italic;
+      font-family: inherit;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(2px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AWS Deployment Agent</h1>
+    <p class="subtitle">Automated EC2 provisioning and Flask deployment pipeline</p>
+
+    <div class="action-row">
+      <button id="deployBtn" onclick="startDeployment()">Deploy Flask App</button>
+    </div>
+
+    <div class="status-panel">
+      <div class="status-header">Live Status Log</div>
+      <ul id="logList" class="log-list">
+        <li class="empty-state">Ready. Click &ldquo;Deploy Flask App&rdquo; to start.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    const deployBtn = document.getElementById("deployBtn");
+    const logList = document.getElementById("logList");
+    let pollInterval = null;
+
+    function renderLogs(logs, url) {
+      if (!logs || logs.length === 0) {
+        logList.innerHTML = '<li class="empty-state">Ready. Click &ldquo;Deploy Flask App&rdquo; to start.</li>';
+        return;
+      }
+
+      logList.innerHTML = "";
+      logs.forEach((log) => {
+        const li = document.createElement("li");
+        li.className = "log-item";
+
+        // Check if log contains a URL or the "🌐 URL: " prefix
+        const urlMatch = log.match(/https?:\/\/[^\s]+/);
+        if (urlMatch) {
+          const matchedUrl = urlMatch[0];
+          const prefix = log.substring(0, urlMatch.index);
+          const link = document.createElement("a");
+          link.href = matchedUrl;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = matchedUrl;
+
+          li.textContent = prefix;
+          li.appendChild(link);
+        } else {
+          li.textContent = log;
+        }
+
+        logList.appendChild(li);
+      });
+    }
+
+    async function pollStatus() {
+      try {
+        const response = await fetch("/status");
+        if (!response.ok) return;
+        const data = await response.json();
+
+        renderLogs(data.logs, data.url);
+
+        if (data.status === "running") {
+          deployBtn.disabled = true;
+          deployBtn.textContent = "Deploying...";
+        } else {
+          deployBtn.disabled = false;
+          deployBtn.textContent = data.status === "success" ? "Deploy Again" : "Deploy Flask App";
+          if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+          }
+        }
+      } catch (err) {
+        console.error("Status check failed:", err);
+      }
+    }
+
+    async function startDeployment() {
+      deployBtn.disabled = true;
+      deployBtn.textContent = "Starting...";
+
+      try {
+        const response = await fetch("/deploy", { method: "POST" });
+        const data = await response.json();
+
+        if (data.logs) {
+          renderLogs(data.logs, data.url);
+        }
+
+        if (!pollInterval) {
+          pollInterval = setInterval(pollStatus, 1500);
+        }
+      } catch (err) {
+        console.error("Failed to trigger deployment:", err);
+        deployBtn.disabled = false;
+        deployBtn.textContent = "Deploy Flask App";
+      }
+    }
+
+    // Check status on page load in case a deployment is already active
+    pollStatus();
+  </script>
+</body>
+</html>
